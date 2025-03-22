@@ -1,0 +1,81 @@
+//@version=6
+indicator("Combined Volume Indicators", overlay=true)
+
+// === Input Parameters ===
+volumeThreshold = 5000000  // Volume threshold in dollars for big volume alert
+timeWindow = 20            // Time window in minutes for big volume alert (first 35 minutes of trading)
+
+// === Delta Volume Calculation ===
+float delta_volume = (close > open ? volume : 0) - (close < open ? volume : 0)
+
+// === Average Delta Volume Calculation ===
+float avg_delta_volume = ta.sma(delta_volume, 5)
+
+// === Total Volume Calculation ===
+float total_volume = ta.sma(volume, 5)
+
+// === Delta Volume Percentage Calculation ===
+float delta_volume_percent = (avg_delta_volume / total_volume) * 100
+
+// === Cumulative Dollar Volume Calculation ===
+var float cumulative_dollar_volume = 0
+var bool is_market_open = false
+var int first_bar_index = na
+
+// Check if the market is open
+is_market_open := time >= timestamp(year, month, dayofmonth, 9, 30)
+
+// Reset cumulative dollar volume and store the first bar index at market open
+if not is_market_open[1] and is_market_open
+    cumulative_dollar_volume := 0
+    first_bar_index := bar_index
+
+// Calculate dollar volume for the current candle
+float dollar_volume = volume * close
+
+// Accumulate dollar volume since the opening bell
+if is_market_open
+    cumulative_dollar_volume := cumulative_dollar_volume + dollar_volume
+
+// === Big Volume in First 35 Minutes Calculation ===
+var bool signalTriggered = false
+var int startTime = na
+var int endTime = na
+
+// Calculate start and end times for the current trading day
+if year != year[1] or month != month[1] or dayofmonth != dayofmonth[1]
+    startTime := timestamp("GMT-4", year, month, dayofmonth, 9, 30)  // 9:30 AM ET
+    endTime := startTime + timeWindow * 60 * 1000  // 10:05 AM ET (35 minutes later)
+    signalTriggered := false  // Reset signal tracking at the start of a new trading day
+
+// Check if the current time is within the first 35 minutes of regular trading hours
+isFirst35Minutes = (time >= startTime) and (time < endTime)
+
+// Check if conditions are met and no signal has been triggered yet for the day
+conditionMet = (dollar_volume >= volumeThreshold) and isFirst35Minutes and not signalTriggered
+
+// === Label Management ===
+var label previous_label_delta = na
+var label previous_label_dollar = na
+
+// Delete previous labels if they exist
+if not na(previous_label_delta)
+    label.delete(previous_label_delta)
+if not na(previous_label_dollar)
+    label.delete(previous_label_dollar)
+
+// Create a new label to display the average Delta Volume as a percentage
+previous_label_delta := label.new(bar_index, high, text="Avg Delta Vol % (5): " + str.tostring(delta_volume_percent, format.percent), color=color.new(color.blue, 75), textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// Create a new label to display the cumulative dollar volume
+previous_label_dollar := label.new(x=first_bar_index, y=ta.lowest(low, 100) * 0.98, text="Dollar Volume: $" + str.tostring(cumulative_dollar_volume, "#,###.00"), color=color.new(color.black, 0), textcolor=color.white, style=label.style_label_center, size=size.normal, xloc=xloc.bar_index, yloc=yloc.price)
+
+// Plot a yellow label on top of the candle where the big volume condition is met
+plotshape(series=conditionMet, location=location.abovebar, color=color.yellow, style=shape.labeldown, text="BV", textcolor=color.black, size=size.small)
+
+// Define the alert condition explicitly
+alertcondition(conditionMet, title="Big Volume Alert", message="Big Volume condition met in the first 35 minutes!")
+
+// Mark signal as triggered for the day
+if conditionMet
+    signalTriggered := true
