@@ -1,0 +1,39 @@
+//@version=6
+indicator("EMA 50 & 200", overlay=true)
+
+// === Input Parameters ===
+int emaShortLength = input.int(50, title="EMA 50 Length", minval=1) // EMA 50
+int emaLongLength = input.int(200, title="EMA 200 Length", minval=1) // EMA 200
+int coolDownPeriod = input.int(5, title="Cool-Down Period (bars)", minval=1) // Cool-down period after a signal
+bool showSignals = input.bool(true, title="Show Buy/Sell Signals") // Toggle signals on/off
+
+// === Calculate EMAs ===
+float ema50 = ta.ema(close, emaShortLength) // EMA 50
+float ema200 = ta.ema(close, emaLongLength) // EMA 200
+
+// === Plot EMAs with Dotted Lines and 50% Opacity ===
+plot(ema50, color=color.new(color.blue, 50), title="EMA 50", linewidth=2, style=plot.style_circles) // Dotted EMA 50
+plot(ema200, color=color.new(color.red, 50), title="EMA 200", linewidth=2, style=plot.style_circles) // Dotted EMA 200
+
+// === Cool-Down Logic ===
+var int lastSignalBar = na // Track the bar index of the last signal
+
+// === Entry Conditions ===
+// Bullish Entry: Price crosses above EMA 50 and EMA 50 is above EMA 200
+bool bullishEntry = ta.crossover(close, ema50) and ema50 > ema200 and (na(lastSignalBar) or (bar_index - lastSignalBar) >= coolDownPeriod)
+
+// Bearish Entry: Price crosses below EMA 50 and EMA 50 is below EMA 200
+bool bearishEntry = ta.crossunder(close, ema50) and ema50 < ema200 and (na(lastSignalBar) or (bar_index - lastSignalBar) >= coolDownPeriod)
+
+// === Plot Buy/Sell Signals with Arrows ===
+if showSignals
+    if bullishEntry
+        lastSignalBar := bar_index // Update last signal bar
+        label.new(bar_index, low, text="🟢", color=color.new(color.green, 50), style=label.style_label_up, size=size.normal, textcolor=color.white)
+    if bearishEntry
+        lastSignalBar := bar_index // Update last signal bar
+        label.new(bar_index, high, text="🔴", color=color.new(color.red, 50), style=label.style_label_down, size=size.normal, textcolor=color.white)
+
+// === Alerts ===
+alertcondition(bullishEntry, title="Bullish Entry", message="Price crossed above EMA 50 with EMA 50 > EMA 200 on the 3-minute chart.")
+alertcondition(bearishEntry, title="Bearish Entry", message="Price crossed below EMA 50 with EMA 50 < EMA 200 on the 3-minute chart.")
