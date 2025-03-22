@@ -1,0 +1,79 @@
+//@version=6
+indicator("Rocket Alert", overlay=true)
+
+// === Input Parameters ===
+int lookbackPeriod = input.int(300, 'Lookback Period for Average Volume', minval=1) // 300 candles
+int timeWindow = input.int(150, 'Time Window in Minutes (first 2.5 hours of trading)', minval=1) // First 2.5 hours after market open
+
+// VIDYA Input Parameters
+int vidya_length = input.int(10, 'VIDYA Length') // Length of the VIDYA calculation
+int vidya_momentum = input.int(20, 'VIDYA Momentum') // Momentum length for VIDYA
+float band_distance = input.float(2, 'Distance factor for upper/lower bands', step = 0.1) // Distance factor for upper/lower bands
+
+// === Market Open and Time Window ===
+var bool signalTriggered = false // Track if the signal has already been triggered for the day
+var int startTime = na // Start time of the trading day (9:30 AM ET)
+var int endTime = na // End time of the first 2.5 hours (12:00 PM ET)
+var int marketCloseTime = na // End time of regular trading hours (4:00 PM ET)
+
+// Reset tracking variables at the start of each new trading day
+if year != year[1] or month != month[1] or dayofmonth != dayofmonth[1]
+    startTime := timestamp("GMT-4", year, month, dayofmonth, 9, 30) // 9:30 AM ET
+    endTime := startTime + timeWindow * 60 * 1000 // 12:00 PM ET
+    marketCloseTime := timestamp("GMT-4", year, month, dayofmonth, 16, 0) // 4:00 PM ET
+    signalTriggered := false // Reset signal trigger for the new day
+
+// Check if the current time is within the first 2.5 hours of trading
+bool isWithinFirst2_5Hours = (time >= startTime) and (time < endTime)
+
+// Check if the current time is within regular trading hours (9:30 AM to 4:00 PM ET)
+bool isRegularTradingHours = (time >= startTime) and (time <= marketCloseTime)
+
+// === Stable Average Volume Calculation ===
+float stableAverageVolume = ta.ema(volume, lookbackPeriod) // Use EMA for a more stable average
+float dynamicVolumeThreshold = stableAverageVolume * 22.0 // 2200% of the stable average volume
+
+// === Dollar Volume Calculation ===
+float dollarVolume = volume * close // Dollar volume for the current candle
+
+// === Delta Volume Calculation ===
+float deltaVolume = (close > open ? volume : 0) - (close < open ? volume : 0) // Delta volume for the current candle
+float totalVolume = ta.sma(volume, 2) // 2-candle average volume
+float deltaVolumePercent = (deltaVolume / totalVolume) * 100 // Delta volume percentage
+
+// Check if Delta Volume is above 65% for the current and previous candle
+bool deltaVolumeCondition = deltaVolumePercent > 65 and deltaVolumePercent[1] > 65
+
+// === VIDYA Calculation ===
+vidya_calc(src, vidya_length, vidya_momentum) =>
+    float momentum = ta.change(src)
+    float sum_pos_momentum = math.sum(momentum >= 0 ? momentum : 0.0, vidya_momentum)
+    float sum_neg_momentum = math.sum(momentum >= 0 ? 0.0 : -momentum, vidya_momentum)
+    float abs_cmo = math.abs(100 * (sum_pos_momentum - sum_neg_momentum) / (sum_pos_momentum + sum_neg_momentum))
+    float alpha = 2 / (vidya_length + 1)
+    var float vidya_value = 0.0
+    vidya_value := alpha * abs_cmo / 100 * src + (1 - alpha * abs_cmo / 100) * nz(vidya_value[1])
+    ta.sma(vidya_value, 15)
+
+float vidya_value = vidya_calc(close, vidya_length, vidya_momentum)
+float atr_value = ta.atr(200) // ATR calculation with length of 200
+float upper_band = vidya_value + atr_value * band_distance
+float lower_band = vidya_value - atr_value * band_distance
+
+// Detect trend direction using crossovers of source with bands
+var bool is_trend_up = false
+if ta.crossover(close, upper_band)
+    is_trend_up := true
+if ta.crossunder(close, lower_band)
+    is_trend_up := false
+
+// === Rocket Signal Conditions ===
+bool rocketCondition = isWithinFirst2_5Hours and dollarVolume >= dynamicVolumeThreshold and deltaVolumeCondition and not signalTriggered and isRegularTradingHours and is_trend_up
+
+// Trigger the Rocket Signal
+if rocketCondition
+    signalTriggered := true // Mark the signal as triggered for the day
+    label.new(bar_index, low, text="🚀", color=color.new(color.purple, 0), style=label.style_label_up, size=size.normal) // Place a Rocket signal on the chart (purple color)
+
+// === Alert Condition ===
+alertcondition(rocketCondition, title="Rocket Alert", message="Rocket condition met! Dollar volume >= 2200% of stable average volume, Delta Volume > 65% for 2 consecutive candles, and VIDYA in uptrend within the first 2.5 hours during regular trading hours.")
