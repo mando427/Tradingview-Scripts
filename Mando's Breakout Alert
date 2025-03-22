@@ -1,0 +1,229 @@
+//@version=6
+indicator("Mando's Breakout Alert", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ＩＮＰＵＴＳ ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+// Input parameters for length, momentum, and source data
+int vidya_length = input.int(10, 'VIDYA Length') // Length of the VIDYA calculation
+int vidya_momentum = input.int(20, 'VIDYA Momentum') // Momentum length for VIDYA
+float band_distance = input.float(2, 'Distance factor for upper/lower bands', step=0.1) // Distance factor for upper/lower bands
+// Define pivot parameters
+int pivot_left_bars = 3 // Left side pivot bars
+int pivot_right_bars = pivot_left_bars // Right side pivot bars
+
+float source = input.source(close, 'Source') // Source for VIDYA calculation
+
+// Define colors for up and down trends
+color up_trend_color = input.color(#17dfad, '+', group='Color', inline='c') // Color for uptrend
+color down_trend_color = input.color(#dd326b, '-', group='Color', inline='c') // Color for downtrend
+bool shadow = input.bool(true, 'Shadow', group='Color', inline='c')
+
+// Initialize variables for line, volume, and trend state
+var line pivot_line = na // Variable for storing line references
+var float volume_value = na // Variable for storing volume data
+float smoothed_value = na // Smoothing variable for VIDYA trend levels
+var bool is_trend_up = false // Boolean variable for tracking trend direction
+
+// Initialize arrays for storing line and volume information
+var array<line> liquidity_lines_low = array.new<line>(500) // Array for storing lines for lows
+var array<line> liquidity_lines_high = array.new<line>(500) // Array for storing lines for highs
+
+var float up_trend_volume = na // Volume accumulated during uptrend
+var float down_trend_volume = na // Volume accumulated during downtrend
+// }
+
+// === Lorentzian Line and Support Moving Average (VIDYA Line) ===
+int lorentzianLength = input.int(21, title="Lorentzian Length", minval=1)
+lorentzianLine = ta.sma(close, lorentzianLength)
+
+// Define VIDYA (Variable Index Dynamic Average) function
+f_vidya_calc(float src, int length, int momentum) =>
+    float momentum_change = ta.change(src)
+    float sum_pos_momentum = math.sum(momentum_change >= 0 ? momentum_change : 0.0, momentum)
+    float sum_neg_momentum = math.sum(momentum_change >= 0 ? 0.0 : -momentum_change, momentum)
+    float abs_cmo = math.abs(100 * (sum_pos_momentum - sum_neg_momentum) / (sum_pos_momentum + sum_neg_momentum))
+    float alpha = 2 / (length + 1)
+    var float vidya = 0.0
+    vidya := alpha * abs_cmo / 100 * src + (1 - alpha * abs_cmo / 100) * nz(vidya[1])
+    ta.sma(vidya, 15)
+
+// Calculate VIDYA value
+float vidya_value = f_vidya_calc(source, vidya_length, vidya_momentum)
+
+// Plot Lorentzian Line and Support Moving Average
+plot(lorentzianLine, title="Lorentzian Line", color=color.new(color.aqua, 50), linewidth=2, style=plot.style_stepline) // 50% opacity
+plot(vidya_value, title="Support Moving Average", color=color.new(color.green, 40), linewidth=3) // Changed to green, 60% opacity (40% transparency)
+
+// ＦＵＮＣＴＩＯＮＳ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+// Method to extend lines and add labels for liquidity levels
+method extend_liquidity_lines(array<line> line_array, float price_level, bool is_cross, float volume_val) =>
+    if line_array.size() > 0 and last_bar_index - bar_index < 5000
+        for i = 0 to line_array.size() - 1 by 1
+            if i < line_array.size()
+                line liquidity_line = line_array.get(i)
+                float current_line_level = line.get_y2(liquidity_line)
+                bool price_cross = is_cross ? price_level < current_line_level and price_level[1] >= current_line_level : price_level > current_line_level and price_level[1] <= current_line_level
+
+                bool is_short_line = bar_index - line.get_x1(liquidity_line) < 50
+
+                if price_cross and is_short_line
+                    line.set_x2(liquidity_line, bar_index)
+                    line_array.remove(i)
+
+                    // Add volume label to the liquidity zone
+                    label.new(bar_index - 1, price_level[1], str.tostring(volume_val, format.volume), color=color.rgb(0, 0, 0, 99), style=is_cross ? label.style_label_lower_left : label.style_label_upper_left, textcolor=chart.fg_color, size=size.small)
+
+                    // Add a circle label to represent liquidity zone
+                    label.new(bar_index - 1, price_level[1], text='◉', color=#00000003, textcolor=is_cross ? down_trend_color : up_trend_color, style=label.style_label_center, size=size.normal)
+                    // }
+
+// ＣＡＬＣＵＬＡＴＩＯＮＳ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+// Calculate the Average True Range (ATR)
+float atr_value = ta.atr(200) // ATR calculation with length of 200
+
+// Calculate upper and lower bands based on VIDYA and ATR
+float upper_band = vidya_value + atr_value * band_distance
+float lower_band = vidya_value - atr_value * band_distance
+
+// Detect trend direction using crossovers of source with bands
+if ta.crossover(source, upper_band)
+    is_trend_up := true
+    is_trend_up
+if ta.crossunder(source, lower_band)
+    is_trend_up := false
+    is_trend_up
+
+// Set trend-based smoothing variable
+if is_trend_up
+    smoothed_value := lower_band
+    smoothed_value
+if not is_trend_up
+    smoothed_value := upper_band
+    smoothed_value
+if ta.change(is_trend_up)
+    smoothed_value := na
+    smoothed_value
+
+// Calculate pivot highs and lows for price action
+bool pivot_high = not na(ta.pivothigh(pivot_left_bars, pivot_right_bars))
+bool pivot_low = not na(ta.pivotlow(close, pivot_left_bars, pivot_right_bars))
+
+// Create and store lines for pivot lows (support zones)
+if low[pivot_right_bars] > smoothed_value and pivot_low
+    pivot_line := line.new(bar_index[pivot_right_bars], low[pivot_right_bars], bar_index[pivot_right_bars] + 5, low[pivot_right_bars], color=color.new(color.blue, 0)) // 100% opacity
+    line.set_width(pivot_line, 2) // Changed from 3 to 2 (less bold)
+    liquidity_lines_low.push(pivot_line)
+    float sum_volume = math.sum(volume, pivot_right_bars + pivot_left_bars)
+    volume_value := sum_volume / (pivot_right_bars + pivot_left_bars)
+    volume_value
+
+// Create and store lines for pivot highs (resistance zones)
+if high[pivot_right_bars] < smoothed_value and pivot_high
+    pivot_line := line.new(bar_index[pivot_right_bars], high[pivot_right_bars], bar_index[pivot_right_bars] + 5, high[pivot_right_bars], color=color.new(down_trend_color, 0)) // 100% opacity
+    liquidity_lines_high.push(pivot_line)
+    float sum_neg_volume = math.sum(-volume, pivot_right_bars + pivot_left_bars)
+    volume_value := sum_neg_volume / (pivot_right_bars + pivot_left_bars)
+    volume_value
+
+// Extend lines to track price movements
+liquidity_lines_high.extend_liquidity_lines(smoothed_value, true, volume_value)
+liquidity_lines_low.extend_liquidity_lines(smoothed_value, false, volume_value)
+
+// Detect changes in the trend direction
+bool trend_cross_up = not is_trend_up[1] and is_trend_up
+bool trend_cross_down = not is_trend_up and is_trend_up[1]
+
+// Reset volume counters when trend changes
+bool trend_change = ta.change(trend_cross_up) or ta.change(trend_cross_down)
+if trend_change
+    up_trend_volume := 0
+    down_trend_volume := 0
+    down_trend_volume
+
+// Accumulate volume during trends
+if not trend_change
+    up_trend_volume := up_trend_volume + (close > open ? volume : 0)
+    down_trend_volume := down_trend_volume + (close < open ? volume : 0)
+    down_trend_volume
+
+// Calculate average volume
+float avg_volume_delta = (up_trend_volume + down_trend_volume) / 2
+
+// Determine the color of the trend
+color trend_color = is_trend_up ? up_trend_color : not is_trend_up ? down_trend_color : chart.fg_color
+
+// Calculate delta volume percentage
+string delta_volume = str.tostring((up_trend_volume - down_trend_volume) / avg_volume_delta * 100, format.percent) == 'NaN%' ? '0%' : str.tostring((up_trend_volume - down_trend_volume) / avg_volume_delta * 100, format.percent)
+
+// === Breakout Alert Condition ===
+// Condition 1: +45% Delta Volume on 2 Consecutive Candles
+bool delta_volume_condition = (up_trend_volume - down_trend_volume) / avg_volume_delta * 100 > 45
+bool delta_volume_two_candles = delta_volume_condition and delta_volume_condition[1]
+
+// Condition 2: Lorentzian Line is ABOVE the Support Moving Average
+bool lorentzian_above_vidya = lorentzianLine > vidya_value
+
+// Condition 3: Price action has closed a minimum of 1 candle above both the Lorentzian Line
+bool price_above_lorentzian = close > lorentzianLine and close[1] > lorentzianLine[1]
+
+// Combined breakout condition
+bool breakout_condition = delta_volume_two_candles and lorentzian_above_vidya and price_above_lorentzian
+
+// Define market hours
+bool is_pre_market = (time >= timestamp(year, month, dayofmonth, 4, 0) and time < timestamp(year, month, dayofmonth, 9, 30)) // Pre-market: 4:00 AM to 9:30 AM
+bool is_trading_hours = (time >= timestamp(year, month, dayofmonth, 9, 30) and time < timestamp(year, month, dayofmonth, 16, 0)) // Regular trading hours: 9:30 AM to 4:00 PM
+bool is_after_hours = (time >= timestamp(year, month, dayofmonth, 16, 0) and time < timestamp(year, month, dayofmonth, 20, 0)) // After-hours: 4:00 PM to 8:00 PM
+
+// Track breakout signals per market period
+var bool breakout_signal_triggered_pre_market = false
+var bool breakout_signal_triggered_trading_hours = false
+var bool breakout_signal_triggered_after_hours = false
+
+// Reset signal tracking at the start of each period
+if is_pre_market and not is_pre_market[1]
+    breakout_signal_triggered_pre_market := false
+if is_trading_hours and not is_trading_hours[1]
+    breakout_signal_triggered_trading_hours := false
+if is_after_hours and not is_after_hours[1]
+    breakout_signal_triggered_after_hours := false
+
+// Plot breakout signal only once per market period
+bool show_pre_market_signal = breakout_condition and is_trend_up and is_pre_market and not breakout_signal_triggered_pre_market
+bool show_trading_hours_signal = breakout_condition and is_trend_up and is_trading_hours and not breakout_signal_triggered_trading_hours
+bool show_after_hours_signal = breakout_condition and is_trend_up and is_after_hours and not breakout_signal_triggered_after_hours
+
+// Update breakout tracking variables
+if show_pre_market_signal
+    breakout_signal_triggered_pre_market := true
+if show_trading_hours_signal
+    breakout_signal_triggered_trading_hours := true
+if show_after_hours_signal
+    breakout_signal_triggered_after_hours := true
+
+// Plot breakout signals in global scope
+plotshape(series=show_pre_market_signal, title="Buy the Breakout (Pre-Market)", location=location.belowbar, color=color.new(color.orange, 0), style=shape.labelup, size=size.tiny)
+plotshape(series=show_trading_hours_signal, title="Buy the Breakout (Trading Hours)", location=location.belowbar, color=color.new(color.orange, 0), style=shape.labelup, size=size.tiny)
+plotshape(series=show_after_hours_signal, title="Buy the Breakout (After Hours)", location=location.belowbar, color=color.new(color.orange, 0), style=shape.labelup, size=size.tiny)
+
+// === Alert Condition ===
+// Alert condition for "Buy the Breakout"
+alertcondition(breakout_condition, title="Buy the Breakout", message="Delta Volume threshold. Set up play at support. Price action holding? Take the play!")
+
+// ＰＬＯＴ ――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――{
+// Display labels for volume and trend statistics on the last bar
+if barstate.islast
+    label.delete(label.new(bar_index, smoothed_value, 'Buy: ' + str.tostring(up_trend_volume, format.volume) + '\n Sell: ' + str.tostring(down_trend_volume, format.volume) + '\nDelta Volume: ' + delta_volume, color=color.new(trend_color, 90), style=is_trend_up ? label.style_label_upper_left : label.style_label_lower_left, textcolor=chart.fg_color)[1])
+
+    label.delete(label.new(bar_index, smoothed_value, text='✪', color=#00000003, textcolor=trend_color, style=label.style_label_center, size=size.large)[1])
+
+// Plot the VIDYA trend line
+p1 = plot(smoothed_value, color=trend_color, linewidth=2, style=plot.style_linebr)
+p2 = plot(hl2, display=display.none)
+
+// Fill between the plot and the VIDYA line
+fill(p1, p2, smoothed_value, hl2, color.new(trend_color, shadow ? 80 : 100), na)
+
+// Plot trend change markers (up and down arrows)
+plotshape(series=trend_cross_up[1] ? smoothed_value[0] : na, title='Trend Up', style=shape.labelup, location=location.absolute, color=color.new(up_trend_color, 50), text='▲', textcolor=chart.fg_color)
+
+plotshape(series=trend_cross_down[1] ? smoothed_value[0] : na, title='Trend Down', style=shape.labeldown, location=location.absolute, color=color.new(down_trend_color, 50), text='▼', textcolor=chart.fg_color)
+// }
