@@ -1,0 +1,37 @@
+//@version=6
+indicator("🛸 UFO Breakout", overlay=true)
+
+// Session times
+premarketSession = "0400-0930"
+regularSession = "0930-1600"
+
+// Detect session
+inPremarket = not na(time("3", premarketSession))
+inRegular = not na(time("3", regularSession))
+
+// Track daily premarket high
+var float premarketHigh = na
+if inPremarket
+    premarketHigh := math.max(nz(premarketHigh), high)
+if not inPremarket and not inRegular
+    premarketHigh := na  // reset after full session ends
+
+// Detect new day
+newDay = (dayofmonth != dayofmonth[1]) or (month != month[1]) or (year != year[1])
+
+// Control breakout signal
+var bool hasShownUFO = false
+if newDay
+    hasShownUFO := false
+
+// Breakout detection: First regular session candle closing above premarket high
+isBreakout = inRegular and not hasShownUFO and close > premarketHigh and close[1] <= premarketHigh
+
+// Plot UFO exactly once, on correct candle
+if isBreakout
+    label.new(bar_index, low, "🛸", yloc=yloc.price, style=label.style_label_center, size=size.large, textcolor=color.black, color=color.new(color.black, 100))
+if isBreakout
+    hasShownUFO := true
+
+// Alert
+alertcondition(isBreakout, "UFO Breakout", "Candle closed above premarket high – UFO alert 🛸")
