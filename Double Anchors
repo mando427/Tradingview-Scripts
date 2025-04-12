@@ -1,0 +1,57 @@
+//@version=6
+indicator("⚓⚓ Double Bottom Volume Decline Entry", overlay=true)
+
+// === INPUTS ===
+lookbackBars = input.int(20, "Double Bottom Lookback")
+volumeDeclinePeriod = input.int(15, "Volume Decline Period")
+wickTolerance = input.float(0.5, "Wick Tolerance (%)", step=0.1)
+cooldownBars = input.int(15, "Cooldown Period (bars)")
+
+// === IMPORTED VIDYA FROM BIGBELUGA ===
+vidya_calc(src, vidya_length, vidya_momentum) =>
+    float momentum = ta.change(src)
+    float sum_pos_momentum = math.sum(momentum >= 0 ? momentum : 0.0, vidya_momentum)
+    float sum_neg_momentum = math.sum(momentum >= 0 ? 0.0 : -momentum, vidya_momentum)
+    float abs_cmo = math.abs(100 * (sum_pos_momentum - sum_neg_momentum) / (sum_pos_momentum + sum_neg_momentum))
+    float alpha = 2 / (vidya_length + 1)
+    var float vidya_value = 0.0
+    vidya_value := alpha * abs_cmo / 100 * src + (1 - alpha * abs_cmo / 100) * nz(vidya_value[1])
+    ta.sma(vidya_value, 15)
+
+vidyaLine = vidya_calc(close, 10, 20)
+
+// === LORENTZIAN LINE (SIMULATED USING KERNEL REGRESSION ESTIMATE) ===
+lorentzianLine = ta.linreg(close, 20, 0)  // Temporary stand-in for actual kernel regression
+
+// === PRICE + VOLUME ===
+low1 = ta.lowest(low, lookbackBars)
+lowIndex1 = ta.valuewhen(low == low1, bar_index, 0)
+
+// Second low after the first
+low2 = ta.valuewhen(bar_index > lowIndex1 and low >= low1 * (1 + wickTolerance / 100), low, 0)
+lowIndex2 = ta.valuewhen(low == low2, bar_index, 0)
+
+// Confirm double bottom pattern
+isDoubleBottom = not na(low1) and not na(low2) and (low2 > low1) and (bar_index == lowIndex2)
+
+// Volume conditions
+avgVol = ta.sma(volume, volumeDeclinePeriod)
+isVolDeclining = volume < avgVol
+
+// Confirm next candle is a full body bullish candle
+isBullishFullBody = close > open and low == math.min(open, close)
+
+// === COOLDOWN TIMER ===
+var int lastEntryBar = na
+cooldownOver = na(lastEntryBar) or (bar_index - lastEntryBar >= cooldownBars)
+
+// Entry Conditions
+isValidEntry = isDoubleBottom and isVolDeclining and low < vidyaLine and lorentzianLine > vidyaLine and cooldownOver and isBullishFullBody
+
+if isValidEntry
+    lastEntryBar := bar_index
+
+// === PLOTS ===
+plotshape(isValidEntry, title="⚓⚓ Anchored Bottom", location=location.belowbar, color=color.new(color.white, 100), style=shape.labelup, text="⚓⚓", textcolor=color.green)
+plot(vidyaLine, title="VIDYA Line", color=color.green)
+plot(lorentzianLine, title="Lorentzian Line", color=color.red)
